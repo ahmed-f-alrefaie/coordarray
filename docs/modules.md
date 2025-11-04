@@ -1,0 +1,1 @@
+::: coordarray.foo
