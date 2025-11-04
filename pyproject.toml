@@ -5,7 +5,7 @@ description = "A numpy array with coordinates"
 authors = [{ name = "Ahmed F. Al-Refaie", email = "ahmed.f.alrefaie@gmail.com" }]
 readme = "README.md"
 keywords = ['python']
-requires-python = ">=3.9,<4.0"
+requires-python = ">=3.10,<4.0"
 classifiers = [
     "Intended Audience :: Developers",
     "Programming Language :: Python",
@@ -16,6 +16,9 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "numpy>=2.2.6",
 ]
 
 [project.urls]
@@ -35,6 +38,7 @@ dev = [
     "mkdocs>=1.4.2",
     "mkdocs-material>=8.5.10",
     "mkdocstrings[python]>=0.26.1",
+    "astropy>=6.1.7",
 ]
 
 [build-system]
@@ -100,6 +104,8 @@ ignore = [
     "E501",
     # DoNotAssignLambda
     "E731",
+    # Avoid specifying long message outside of exception
+    "TRY003",
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -114,4 +120,3 @@ skip_empty = true
 [tool.coverage.run]
 branch = true
 source = ["src"]
-
