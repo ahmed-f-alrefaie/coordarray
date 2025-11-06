@@ -425,3 +425,17 @@ def test_slicing_np_array():
 
     assert coord_array[0].shape == (10,)
     assert coord_array[0].coords["x"] == 0
+
+
+def test_coordarray_interp_match():
+    """Test coordarray matching coordinates with interpolation."""
+    data = np.array([[10, 20, 30], [40, 50, 60], [70, 80, 90], [90, 100, 110]])
+    coords = {"x": np.array([1.0, 2.0, 3.0, 4.0]), "y": np.array([10.0, 20.0, 30.0])}
+    arr = coordarray(data, **coords)
+
+    new_coords = {"x": np.array([1.5, 2.5, 2.7, 2.9]), "y": np.array([10.5, 20.5, 21, 25, 29])}
+
+    interp_arr = arr.interp_match(new_coords)
+
+    assert interp_arr.shape == (4, 5)
+    assert interp_arr.axes == ("x", "y")

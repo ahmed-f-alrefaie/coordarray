@@ -36,6 +36,10 @@ _unary_ops = [
 ]
 
 
+class TransformProtocol(t.Protocol):
+    def __call__(self, coordinates: dict[str, S], data: T, *args: t.Any, **kwds: t.Any) -> tuple[dict[str, S], T]: ...
+
+
 def _binary_op_factory(
     op_name: str,
 ) -> tuple[
@@ -522,7 +526,7 @@ class coordarray(t.Generic[T, S]):
         if isinstance(key, str):
             return self._broadcast_coord_to_target_shape(key)
         elif isinstance(key, (list, tuple, np.ndarray)):
-            if None in key:
+            if any(x is None for x in key):
                 raise ValueError("None is not allowed in slices with coord array")
             total_keys = len(key)
 
@@ -732,53 +736,84 @@ class coordarray(t.Generic[T, S]):
             return self.data.copy()
         return self.data
 
-    # def interp_to(
-    #     self,
-    #     coords: t.Optional[dict[str, "coordarray"]] = None,
-    #     **kwargs: "coordarray",
-    # ) -> "coordarray":
-    #     """Interpolate to new coordinate system."""
-    #     from ..opacity.interpolation import bilinear_interpolate
-    #     from ..opacity.interpolation import linear_interpolation
+    def interp_match(
+        self,
+        coords: t.Union["coordarray[T,S]", dict[str, S]],
+    ) -> "coordarray":
+        """Interpolate to match another coordarray's coordinates.
 
-    #     if coords is None:
-    #         coords = kwargs
+        Args:
+            coords: Coordinates to match
+        Returns:
+            coordarray interpolated to match coordinates
+        Raises:
+            ValueError: If no matching coordinates to interpolate
 
-    #     coord_values = list(coords.values())
-    #     first = coord_values[0].coords
 
-    #     if not all(_all_matching_coords(c.coords, first) for c in coord_values):
-    #         raise ValueError(
-    #             "All coordinates must match in order to interpolate"
-    #             " to a new coordinate system"
-    #         )
+        """
+        from scipy.interpolate import make_interp_spline
 
-    #     new_coords = {**self.coords}
-    #     for k in coords.keys():
-    #         new_coords.pop(k, None)
+        if isinstance(coords, coordarray):
+            coords = coords.array_coords
 
-    #     new_coords = {**first, **new_coords}
+        same_coords = _matching_coords(self.array_coords, coords)
 
-    #     interpolation_axes = tuple(self._coord_to_axis(x) for x in coords.keys())
+        if not same_coords:
+            raise ValueError("No matching coordinates to interpolate")
 
-    #     interpolation_function = bilinear_interpolate
-    #     if len(coords) == 1:
-    #         interpolation_function = linear_interpolation
-    #     elif len(coords) > 2:
-    #         raise NotImplementedError(
-    #             "Only linear and bilinear interpolation is supported"
-    #         )
+        interp_coords = {k: coords[k] for k in same_coords}
+        new_data = self.data
 
-    #     interpolation_coords = tuple(self.coords[x] for x in coords.keys())
+        current_coords = self.coords.copy()
 
-    #     new_data = interpolation_function(
-    #         self.data,
-    #         *tuple(c.data for c in coords.values()),
-    #         *interpolation_coords,
-    #         axes=interpolation_axes,
-    #     )
+        for k, coord in interp_coords.items():
+            spline = make_interp_spline(self.coords[k], new_data, k=1, axis=self._coord_to_axis(k))
+            new_data = spline(coord)
+            current_coords[k] = coord
 
-    #     return coordarray(new_data, new_coords)
+        return coordarray(new_data, current_coords)
+
+    def interp_to(
+        self,
+        coords: t.Optional[dict[str, "coordarray"]] = None,
+        **kwargs: "coordarray",
+    ) -> "coordarray":
+        """Interpolate to new coordinate system."""
+        from .interpolation import bilinear_interpolate, linear_interpolation
+
+        if coords is None:
+            coords = kwargs
+
+        coord_values = list(coords.values())
+        first = coord_values[0].coords
+
+        if not all(_all_matching_coords(c.coords, first) for c in coord_values):
+            raise ValueError("All coordinates must match in order to interpolate to a new coordinate system")
+
+        new_coords = {**self.coords}
+        for k in coords:
+            new_coords.pop(k, None)
+
+        new_coords = {**first, **new_coords}
+
+        interpolation_axes = tuple(self._coord_to_axis(x) for x in coords)
+
+        interpolation_function = bilinear_interpolate
+        if len(coords) == 1:
+            interpolation_function = linear_interpolation
+        elif len(coords) > 2:
+            raise NotImplementedError("Only linear and bilinear interpolation is supported")
+
+        interpolation_coords = tuple(self.coords[x] for x in coords)
+
+        new_data = interpolation_function(
+            self.data,
+            *tuple(c.data for c in coords.values()),
+            *interpolation_coords,
+            axes=interpolation_axes,
+        )
+
+        return coordarray(new_data, new_coords)
 
     # This is for operations like np.square, np.add, etc.
     def __array_ufunc__(self, ufunc: np.ufunc, method: str, *inputs: t.Any, **kwargs: t.Any):
@@ -838,6 +873,53 @@ class coordarray(t.Generic[T, S]):
     def __repr__(self) -> str:
         """Representation."""
         return f"Coordinate Array\n data: {self.data.__repr__()}\n coords: {self.coords}"
+
+    def apply_coordinate_transform(
+        self,
+        coords: t.Sequence[str],
+        func: TransformProtocol,
+        ravel_other_dimensions: t.Optional[bool] = True,
+        args: tuple[t.Any, ...] = (),
+        kwargs: t.Optional[dict[str, t.Any]] = None,
+    ) -> "coordarray[T,S]":
+        """Apply a transformation to the coordinates.
+
+        Args:
+            coords: Coordinates to transform
+            func: Transformation function
+            ravel_other_dimensions: Ravel other dimensions
+
+        Returns:
+            Transformed coordarray
+        """
+        kwargs = kwargs or {}
+        check_if_coords_exist = all(k in self.coords for k in coords)
+        if not check_if_coords_exist:
+            raise ValueError("Coordinates to transform must exist in coordarray")
+
+        # Transpose so that coords to transform are first
+        new_axes = list(coords) + [k for k in self.array_axes if k not in coords]
+        transposed = self.transpose(*new_axes)
+        data = transposed.data
+        coord_data = transposed.array_coords
+        if ravel_other_dimensions:
+            # Ravel other dimensions
+            shape_to_ravel = (np.prod(data.shape[len(coords) :]),)
+            new_shape = data.shape[: len(coords)] + shape_to_ravel
+            data = data.reshape(new_shape)
+
+        new_coord_data, new_data = func({k: coord_data[k] for k in coords}, data, *args, **kwargs)
+
+        # Reshape back to original shape
+        if ravel_other_dimensions:
+            num_dims = new_data.ndim
+            preserved_shape = data.shape[len(coords) :]
+            num_dims_to_reshape = num_dims - len(coords)
+            new_shape = new_data.shape[:num_dims_to_reshape] + preserved_shape
+            new_data = new_data.reshape(new_shape)
+
+        new_coords = {**new_coord_data, **{k: v for k, v in coord_data.items() if k not in coords}}
+        return coordarray(new_data, new_coords).transpose(*self.array_axes)
 
 
 for op_name in _binary_ops:
